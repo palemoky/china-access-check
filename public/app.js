@@ -5,15 +5,15 @@
  * 总分 100。每项检测产出 0~1 的置信度，乘以权重后求和。
  * ============================================================ */
 const WEIGHTS = {
-  ipCountry: 23, // IP 归属地为中国大陆
-  blocked: 18,   // 无法访问 Google 等在大陆被屏蔽的服务
-  latency: 13,   // 到大陆站点的延迟显著更低（说明物理位置近）
-  timezone: 11,  // 浏览器时区为中国时区
-  language: 10,  // 浏览器语言为简体中文
-  twFlag: 8,     // 台湾旗帜 emoji 被屏蔽（大陆行货/中国区 Apple 设备，VPN 无法掩盖）
-  rtt: 7,        // 到 Cloudflare 边缘的 TCP RTT 偏高（典型跨境直连特征）
-  tzMismatch: 5, // 浏览器时区与 IP 归属地时区不一致（代理迹象）
-  webrtc: 5,     // WebRTC 泄露了与 HTTP 不同的公网 IP（代理迹象）
+  ipCountry: 23,   // IP 归属地为中国大陆
+  blocked: 18,     // 无法访问 Google 等在大陆被屏蔽的服务
+  latency: 13,     // 到大陆站点的延迟显著更低（说明物理位置近）
+  timezone: 11,    // 浏览器时区为中国时区
+  language: 10,    // 浏览器语言为简体中文
+  twFlag: 8,       // 台湾旗帜 emoji 被屏蔽（大陆行货/中国区 Apple 设备，VPN 无法掩盖）
+  intlLatency: 8,  // 到美国站点延迟异常偏高而大陆很近（跨境拥堵/GFW 检测开销的典型形态）
+  tzMismatch: 5,   // 浏览器时区与 IP 归属地时区不一致（代理迹象）
+  webrtc: 4,       // WebRTC 泄露的真实公网 IP 在中国，或与 HTTP 出口不一致
 };
 
 const THRESHOLDS = {
@@ -22,8 +22,8 @@ const THRESHOLDS = {
   latencyNear: 60,      // 低于此值视为“身处大陆或紧邻” (ms)
   latencyMid: 120,
   latencyFar: 200,
-  rttHigh: 150,         // 到 CF 边缘 RTT，大陆直连典型值
-  rttMid: 80,
+  usSlow: 300,          // 到美国的延迟；大陆直连典型 > 300ms，而港/新/日/韩直连多在 150~250ms
+  usMid: 200,
 };
 
 // 大陆可达、境外访问明显偏慢的站点（favicon 支持 no-cors 拉取）。
@@ -33,6 +33,15 @@ const CHINA_ENDPOINTS = [
   { name: "百度", url: "https://www.baidu.com/favicon.ico" },
   { name: "腾讯", url: "https://www.qq.com/favicon.ico" },
   { name: "哔哩哔哩", url: "https://www.bilibili.com/favicon.ico" },
+];
+
+// 地理位置固定的国际参照点：AWS S3 区域端点，无全球 CDN、全球可达、大陆未屏蔽，
+// 适合用来测“物理线路”而不是“最近的 CDN 节点”
+const INTL_ENDPOINTS = [
+  { name: "美国东部（弗吉尼亚）", region: "us", url: "https://s3.us-east-1.amazonaws.com/" },
+  { name: "美国西部（加州）", region: "us", url: "https://s3.us-west-1.amazonaws.com/" },
+  { name: "日本（东京）", region: "asia", url: "https://s3.ap-northeast-1.amazonaws.com/" },
+  { name: "新加坡", region: "asia", url: "https://s3.ap-southeast-1.amazonaws.com/" },
 ];
 
 // 在大陆被屏蔽的服务
@@ -235,6 +244,7 @@ async function checkLatency() {
   else if (basis < THRESHOLDS.latencyFar) confidence = 0.2;
   return {
     confidence,
+    basis,
     summary: basis === Infinity ? "大陆站点不可达" : `${basis} ms（第二低）`,
     detail:
       results.map((r) => `${r.name}: ${fmtMs(r.ms)}`).join("\n") +
@@ -242,27 +252,36 @@ async function checkLatency() {
   };
 }
 
-async function checkRtt(ipInfo) {
-  // 自测到本站（Cloudflare 边缘）的往返延迟作为参考
-  const selfMs = await minLatency("/api/ping");
-  const rtt = ipInfo?.clientTcpRtt;
+async function checkIntlLatency(latencyPromise) {
+  const results = await Promise.all(
+    INTL_ENDPOINTS.map(async (e) => ({ ...e, ms: await minLatency(e.url) }))
+  );
+  const usMin = Math.min(...results.filter((r) => r.region === "us").map((r) => r.ms));
+  const asiaMin = Math.min(...results.filter((r) => r.region === "asia").map((r) => r.ms));
+  const cnBasis = (await latencyPromise.catch(() => null))?.basis ?? Infinity;
+
+  // 单独看“到美国慢”说明不了什么（可能只是离美国远）；
+  // 但“到大陆很近 + 到美国异常慢”是跨境线路（拥堵/加解密/GFW 检测开销）的典型形态
   let confidence = 0;
-  if (typeof rtt === "number") {
-    if (rtt >= THRESHOLDS.rttHigh) confidence = 1;
-    else if (rtt >= THRESHOLDS.rttMid) confidence = 0.5;
-  }
+  if (cnBasis < THRESHOLDS.latencyNear && usMin >= THRESHOLDS.usSlow) confidence = 1;
+  else if (cnBasis < THRESHOLDS.latencyNear && usMin >= THRESHOLDS.usMid) confidence = 0.5;
+  else if (usMin >= 400 && asiaMin < THRESHOLDS.latencyMid) confidence = 0.3;
+
   return {
     confidence,
-    summary: typeof rtt === "number" ? `TCP RTT ${rtt} ms @ ${ipInfo.colo || "?"}` : "无数据",
+    usMin,
+    asiaMin,
+    summary:
+      usMin === Infinity ? "美国站点不可达" : `美国 ${usMin} ms / 亚太 ${fmtMs(asiaMin)}`,
     detail:
-      `Cloudflare 接入点: ${ipInfo?.colo || "未知"}\n` +
-      `服务端测得 TCP RTT: ${typeof rtt === "number" ? rtt + " ms" : "未知"}\n` +
-      `浏览器实测往返: ${fmtMs(selfMs)}\n` +
-      "Cloudflare 在大陆无公开节点，大陆直连用户到边缘的 RTT 通常明显偏高",
+      results.map((r) => `${r.name}: ${fmtMs(r.ms)}`).join("\n") +
+      "\n参照点为 AWS 区域端点（位置固定、无全球 CDN）。大陆直连美国通常 > 300 ms，" +
+      "而港/新/日/韩等地直连美国多在 150~250 ms",
   };
 }
 
-function checkWebRTC(ipInfo) {
+// 收集 WebRTC STUN (srflx) 暴露的公网候选地址
+function gatherStunIps() {
   return new Promise((resolve) => {
     let pc;
     try {
@@ -270,10 +289,9 @@ function checkWebRTC(ipInfo) {
         iceServers: [{ urls: "stun:stun.cloudflare.com:3478" }],
       });
     } catch {
-      resolve({ confidence: 0, summary: "不支持", detail: "浏览器不支持 WebRTC 或已被禁用" });
+      resolve(null); // 不支持 WebRTC
       return;
     }
-
     const ips = new Set();
     let done = false;
     const finish = () => {
@@ -281,32 +299,8 @@ function checkWebRTC(ipInfo) {
       done = true;
       clearTimeout(timer);
       pc.close();
-
-      const httpIp = ipInfo?.ip || "";
-      const leaked = [...ips];
-      const sameFamily = leaked.filter((ip) => ip.includes(":") === httpIp.includes(":"));
-      const flags = [];
-      let confidence = 0;
-      let summary, detail;
-
-      if (leaked.length === 0) {
-        summary = "无公网候选";
-        detail = "未获取到 STUN 公网地址（UDP 被阻断或浏览器已保护），无法比对";
-      } else if (leaked.includes(httpIp)) {
-        summary = "与 HTTP IP 一致";
-        detail = `STUN 公网地址: ${leaked.join(", ")}\n与 HTTP 出口一致，无代理泄露`;
-      } else if (sameFamily.length > 0) {
-        summary = "泄露了不同的公网 IP";
-        detail = `STUN 公网地址: ${leaked.join(", ")}\nHTTP 出口: ${httpIp}\n两者不一致，说明 HTTP 流量走了代理，而 UDP 直连暴露了真实网络`;
-        flags.push("WebRTC 泄露的公网 IP 与 HTTP 出口不一致");
-        confidence = 1; // 权重贡献在汇总处仍受“是否有其他中国信号”约束
-      } else {
-        summary = "IP 协议族不同";
-        detail = `STUN 地址 (${leaked.join(", ")}) 与 HTTP 出口 (${httpIp}) 协议族不同，无法直接比对`;
-      }
-      resolve({ confidence, flags, summary, detail });
+      resolve([...ips]);
     };
-
     const timer = setTimeout(finish, 5000);
     pc.createDataChannel("probe");
     pc.onicecandidate = (e) => {
@@ -314,12 +308,78 @@ function checkWebRTC(ipInfo) {
       // candidate 格式: foundation component protocol priority address port typ type ...
       const parts = e.candidate.candidate.split(" ");
       const typIdx = parts.indexOf("typ");
-      if (typIdx > 0 && parts[typIdx + 1] === "srflx") ips.add(parts[4]);
+      // 排除 mDNS 混淆地址（.local）与私网地址
+      if (typIdx > 0 && parts[typIdx + 1] === "srflx" && !parts[4].endsWith(".local"))
+        ips.add(parts[4]);
     };
     pc.createOffer()
       .then((offer) => pc.setLocalDescription(offer))
       .catch(finish);
   });
+}
+
+async function checkWebRTC(ipInfo) {
+  const leaked = await gatherStunIps();
+  if (leaked === null) {
+    return { confidence: 0, summary: "不支持", detail: "浏览器不支持 WebRTC 或已被禁用" };
+  }
+  if (leaked.length === 0) {
+    return {
+      confidence: 0,
+      summary: "无公网候选",
+      detail: "未获取到 STUN 公网地址（UDP 被阻断或浏览器已保护），无法比对",
+    };
+  }
+
+  const httpIp = ipInfo?.ip || "";
+  // 只对 IPv4 做 chnroutes 归属判断
+  const v4 = leaked.filter((ip) => /^\d+\.\d+\.\d+\.\d+$/.test(ip));
+  const chinaChecks = await Promise.all(
+    v4.map((ip) =>
+      fetch(`/api/ip-china?ip=${encodeURIComponent(ip)}`)
+        .then((r) => r.json())
+        .then((j) => ({ ip, china: !!j.china }))
+        .catch(() => ({ ip, china: false }))
+    )
+  );
+  const chinaLeak = chinaChecks.find((c) => c.china);
+
+  if (chinaLeak) {
+    // 最强信号：无论 HTTP 出口在哪，WebRTC 暴露的真实公网 IP 落在中国大陆
+    return {
+      confidence: 1,
+      chinaLeak: true,
+      flags: [`WebRTC 泄露的真实公网 IP (${chinaLeak.ip}) 属于中国大陆`],
+      summary: "真实 IP 在中国大陆",
+      detail:
+        `STUN 公网地址: ${leaked.join(", ")}\n` +
+        `其中 ${chinaLeak.ip} 经 chnroutes 判定属于中国大陆。\n` +
+        "即使 HTTP 走了代理，UDP 直连仍暴露了位于中国的真实网络",
+    };
+  }
+  if (leaked.includes(httpIp)) {
+    return {
+      confidence: 0,
+      summary: "与 HTTP IP 一致",
+      detail: `STUN 公网地址: ${leaked.join(", ")}\n与 HTTP 出口一致，无代理泄露`,
+    };
+  }
+  const sameFamily = leaked.filter((ip) => ip.includes(":") === httpIp.includes(":"));
+  if (sameFamily.length > 0) {
+    return {
+      confidence: 1, // 仅代理迹象，是否计入中国分在汇总处受其他信号约束
+      flags: ["WebRTC 泄露的公网 IP 与 HTTP 出口不一致"],
+      summary: "泄露了不同的公网 IP",
+      detail:
+        `STUN 公网地址: ${leaked.join(", ")}\nHTTP 出口: ${httpIp}\n` +
+        "两者不一致，说明 HTTP 流量走了代理，而 UDP 直连暴露了另一网络（但不在中国大陆）",
+    };
+  }
+  return {
+    confidence: 0,
+    summary: "IP 协议族不同",
+    detail: `STUN 地址 (${leaked.join(", ")}) 与 HTTP 出口 (${httpIp}) 协议族不同，无法直接比对`,
+  };
 }
 
 /* ============================================================
@@ -333,7 +393,7 @@ const CHECK_DEFS = [
   { key: "timezone", icon: "🕐", name: "浏览器时区" },
   { key: "language", icon: "🀄️", name: "浏览器语言" },
   { key: "twFlag", icon: "🏳️", name: "台湾旗帜 Emoji" },
-  { key: "rtt", icon: "📡", name: "边缘接入特征" },
+  { key: "intlLatency", icon: "🌍", name: "国际站点延迟" },
   { key: "tzMismatch", icon: "🎭", name: "时区一致性" },
   { key: "webrtc", icon: "🔓", name: "WebRTC 泄露" },
 ];
@@ -385,13 +445,25 @@ function verdict(score) {
   return ["基本不会被识别为中国大陆用户", "none"];
 }
 
-function renderScore(total, flags) {
+function renderScore(total, flags, analysis) {
   const [text, level] = verdict(total);
   $("#score-num").textContent = Math.round(total);
   $("#score-verdict").textContent = text;
   const bar = $("#score-bar-fill");
   bar.style.width = `${Math.min(100, total)}%`;
   $("#score").dataset.level = level;
+
+  const analysisEl = $("#analysis");
+  if (analysis?.length) {
+    analysisEl.hidden = false;
+    analysisEl.innerHTML =
+      "<strong>综合研判（信号交叉比对，额外计分）：</strong>" +
+      analysis
+        .map((a) => `<div class="analysis-item">🔍 ${a.text}（+${a.bonus} 分）</div>`)
+        .join("");
+  } else {
+    analysisEl.hidden = true;
+  }
 
   const flagsEl = $("#flags");
   if (flags.length) {
@@ -409,6 +481,7 @@ async function runAll() {
   $("#score-num").textContent = "…";
   $("#score-verdict").textContent = "检测中，约需 10 秒";
   $("#flags").hidden = true;
+  $("#analysis").hidden = true;
   renderCards();
 
   const scores = {};
@@ -460,31 +533,62 @@ async function runAll() {
     failCard("language", e);
   }
 
+  let twCensored = false;
   try {
-    record("twFlag", checkTwFlag());
+    const tw = checkTwFlag();
+    twCensored = tw.confidence >= 1;
+    record("twFlag", tw);
   } catch (e) {
     failCard("twFlag", e);
   }
 
-  // 网络探测并行跑
-  const [blocked, latency, rtt, webrtc] = await Promise.all([
+  // 网络探测并行跑；国际延迟检测依赖大陆延迟的结果，共享同一个 promise
+  const latencyPromise = checkLatency();
+  const [blocked, latency, intl, webrtc] = await Promise.all([
     checkBlocked().catch((e) => (failCard("blocked", e), null)),
-    checkLatency().catch((e) => (failCard("latency", e), null)),
-    checkRtt(ipInfo).catch((e) => (failCard("rtt", e), null)),
+    latencyPromise.catch((e) => (failCard("latency", e), null)),
+    checkIntlLatency(latencyPromise).catch((e) => (failCard("intlLatency", e), null)),
     checkWebRTC(ipInfo).catch((e) => (failCard("webrtc", e), null)),
   ]);
 
   if (blocked) record("blocked", blocked);
   if (latency) record("latency", latency);
-  if (rtt) record("rtt", rtt);
+  if (intl) record("intlLatency", intl);
   if (webrtc) {
-    // WebRTC 泄露本身只说明在用代理；只有同时具备其他中国信号，才计入中国分
-    if (webrtc.confidence > 0 && !tzChina && !langChina) webrtc.confidence = 0;
+    // 泄露 IP 在中国 → 直接计分；仅“与 HTTP 出口不一致”的代理迹象则需其他中国信号佐证
+    if (webrtc.confidence > 0 && !webrtc.chinaLeak && !tzChina && !langChina)
+      webrtc.confidence = 0;
     record("webrtc", webrtc);
   }
 
-  const total = Object.values(scores).reduce((a, b) => a + b, 0);
-  renderScore(total, allFlags);
+  // ---- 综合研判：交叉比对各信号的一致性 ----
+  // 单项检测各自打分，但“信号之间的矛盾”本身是更强的证据：
+  // 例如 IP 在境外，物理延迟却表明身在大陆 → 分流代理的典型形态。
+  const analysis = [];
+  const cnBasis = latency?.basis ?? Infinity;
+  const usMin = intl?.usMin ?? Infinity;
+  const notCN = !!ipInfo?.country && ipInfo.country !== "CN";
+
+  if (notCN && cnBasis < THRESHOLDS.latencyNear && usMin >= THRESHOLDS.usSlow) {
+    analysis.push({
+      bonus: 12,
+      text:
+        `IP 归属地是 ${ipInfo.country}，但到大陆站点仅 ${cnBasis} ms、到美国站点却要 ${usMin} ms：` +
+        "物理位置高度疑似大陆，IP 更像是分流代理的出口",
+    });
+  }
+  if (notCN && twCensored) {
+    analysis.push({
+      bonus: 8,
+      text: "设备为大陆行货或中国区系统（🇹🇼 被屏蔽），IP 却在境外：疑似使用代理的中国用户",
+    });
+  }
+  // 注：「时区为中国 + IP 在境外」的矛盾已由 tzMismatch 权重项计分，不在此重复加分
+
+  const bonus = analysis.reduce((sum, a) => sum + a.bonus, 0);
+  const base = Object.values(scores).reduce((a, b) => a + b, 0);
+  const total = Math.min(100, base + bonus);
+  renderScore(total, allFlags, analysis);
   $("#rerun").disabled = false;
 }
 

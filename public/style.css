@@ -132,7 +132,8 @@ header h1 {
 #rerun:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
 #rerun:disabled { opacity: 0.5; cursor: wait; }
 
-#flags {
+#flags,
+#analysis {
   margin-top: 1rem;
   padding-top: 0.75rem;
   border-top: 1px dashed var(--border);
@@ -140,6 +141,7 @@ header h1 {
 }
 
 .flag { color: var(--partial); }
+.analysis-item { color: var(--hit); }
 
 /* ---- 检测卡片 ---- */
 .grid {
