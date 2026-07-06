@@ -1,0 +1,16 @@
+{
+  "name": "china-access-check",
+  "version": "0.1.0",
+  "private": true,
+  "description": "检测当前访问环境是否会被网站识别为中国大陆用户",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "types": "wrangler types"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20250620.0",
+    "typescript": "^5.8.0",
+    "wrangler": "^4.0.0"
+  }
+}
