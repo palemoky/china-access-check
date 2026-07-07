@@ -39,12 +39,16 @@ main {
   padding: 2rem 1rem 3rem;
 }
 
-header {
-  position: relative;
+.header-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 0.5rem;
 }
 
 header h1 {
-  margin: 0 0 0.5rem;
+  margin: 0;
   font-size: 1.7rem;
 }
 
@@ -55,9 +59,7 @@ header h1 {
 }
 
 #github-link {
-  position: absolute;
-  top: 0;
-  right: 0;
+  flex-shrink: 0;
   color: var(--text);
   opacity: 0.85;
   transition: opacity 0.2s;
@@ -78,9 +80,20 @@ header h1 {
 
 .score-main {
   display: flex;
-  align-items: center;
+  align-items: stretch;
+  justify-content: center;
   gap: 1.25rem;
   flex-wrap: wrap;
+}
+
+/* 圆环右侧：判词+进度条（上）与操作按钮（下）两层，撑到与圆环等高 */
+.score-right {
+  flex: 1;
+  min-width: 200px;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: 0.75rem;
 }
 
 .score-circle {
@@ -267,6 +280,46 @@ body.redacted .secret {
 
 footer {
   margin-top: 2rem;
+  padding: 0.75rem 0;
+  border-top: 1px solid var(--border);
+  background: var(--bg);
   font-size: 0.8rem;
   color: var(--muted);
+}
+
+/* ---- 宽屏：双栏仪表盘布局，利用横向空间、减少纵向滚动 ---- */
+@media (min-width: 1040px) {
+  main {
+    max-width: 1320px;
+    padding: 2.5rem 1.5rem 3rem;
+    display: grid;
+    grid-template-columns: 350px 1fr;
+    grid-template-areas:
+      "header checks"
+      "score  checks"
+      "footer checks";
+    grid-template-rows: auto auto 1fr;
+    column-gap: 2rem;
+    align-items: start;
+  }
+
+  header { grid-area: header; }
+
+  #score {
+    grid-area: score;
+    position: sticky;
+    top: 1.5rem;
+    margin-bottom: 0;
+  }
+
+  /* 侧栏较窄，圆环换行到单独一行，右侧内容改为全宽居中堆叠 */
+  .score-right { text-align: center; }
+  .score-right .score-actions { justify-content: center; }
+
+  #checks { grid-area: checks; }
+
+  footer {
+    grid-area: footer;
+    margin-top: 1.25rem;
+  }
 }
