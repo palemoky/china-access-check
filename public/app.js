@@ -11,7 +11,7 @@ const WEIGHTS = {
   timezone: 11,    // 浏览器时区为中国时区
   language: 10,    // 浏览器语言为简体中文
   dnsLeak: 9,      // DNS 解析器出口在中国大陆（分流代理常只代理 HTTP、DNS 仍走国内）
-  twFlag: 8,       // 台湾旗帜 emoji 被屏蔽（大陆行货/中国区 Apple 设备，VPN 无法掩盖）
+  twFlag: 8,       // 某个旗帜 emoji 被屏蔽（大陆行货/中国区 Apple 设备，VPN 无法掩盖）
   intlLatency: 6,  // 到美国站点延迟异常偏高而大陆很近（跨境拥堵/GFW 检测开销的典型形态）
   tzMismatch: 3,   // 浏览器时区与 IP 归属地时区不一致（代理迹象）
   webrtc: 4,       // WebRTC 泄露的真实公网 IP 在中国，或与 HTTP 出口不一致
@@ -205,11 +205,11 @@ function checkTwFlag() {
     return {
       confidence: 1,
       summary: "🇹🇼 被系统屏蔽",
-      flags: ["台湾旗帜 emoji 被屏蔽：设备为大陆行货或地区设为中国大陆，VPN 无法掩盖此特征"],
+      flags: ["某个旗帜 emoji 被屏蔽：设备为大陆行货或地区设为中国大陆，VPN 无法掩盖此特征"],
       detail:
         "🇨🇳 正常渲染为彩色旗帜，🇹🇼 却" +
         (tw.ligates ? "被替换成黑白占位符" : "未合成旗帜") +
-        "。\n大陆销售的 Apple 设备或地区设为中国大陆的系统会屏蔽台湾旗帜，" +
+        "。\n大陆销售的 Apple 设备或地区设为中国大陆的系统会屏蔽某个旗帜，" +
         "这是一个与网络无关的设备级信号",
     };
   }
@@ -478,7 +478,7 @@ const CHECK_DEFS = [
   { key: "timezone", icon: "🕐", name: "浏览器时区" },
   { key: "language", icon: "🀄️", name: "浏览器语言" },
   { key: "dnsLeak", icon: "🔀", name: "DNS 解析器归属" },
-  { key: "twFlag", icon: "🏳️", name: "台湾旗帜 Emoji" },
+  { key: "twFlag", icon: "🏳️", name: "某个旗帜 Emoji" },
   { key: "intlLatency", icon: "🌍", name: "国际站点延迟" },
   { key: "tzMismatch", icon: "🎭", name: "时区一致性" },
   { key: "webrtc", icon: "🔓", name: "WebRTC 泄露" },
