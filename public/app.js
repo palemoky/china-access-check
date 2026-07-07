@@ -25,6 +25,8 @@ const THRESHOLDS = {
   latencyFar: 200,
   usSlow: 300,          // 到美国的延迟；大陆直连典型 > 300ms，而港/新/日/韩直连多在 150~250ms
   usMid: 200,
+  geoRttMid: 200,       // IP 声称所在区域的实测 RTT 超过此值即与归属地不符（真在当地 < 100ms）
+  geoRttFar: 300,       // 超过此值为强不符，已达大陆直连美国的典型水平
 };
 
 // 大陆可达、境外访问明显偏慢的站点（favicon 支持 no-cors 拉取）。
@@ -44,6 +46,12 @@ const INTL_ENDPOINTS = [
   { name: "日本（东京）", region: "asia", url: "https://s3.ap-northeast-1.amazonaws.com/" },
   { name: "新加坡", region: "asia", url: "https://s3.ap-southeast-1.amazonaws.com/" },
 ];
+
+// IP 归属地落在这些国家/地区时，可用同区域参照点的实测 RTT 核验归属地真伪
+const REGION_COUNTRIES = {
+  us: ["US"],
+  asia: ["JP", "SG", "HK", "TW", "KR", "MO"],
+};
 
 // 在大陆被屏蔽的主流服务（generate_204 / favicon 均为轻量资源，支持 no-cors 探测）。
 // 覆盖多家独立基础设施：单一服务不可达可能是该服务自身故障或广告拦截，
@@ -276,7 +284,7 @@ async function checkLatency() {
   };
 }
 
-async function checkIntlLatency(latencyPromise) {
+async function checkIntlLatency(latencyPromise, ipInfo) {
   const results = await Promise.all(
     INTL_ENDPOINTS.map(async (e) => ({ ...e, ms: await minLatency(e.url) }))
   );
@@ -291,16 +299,38 @@ async function checkIntlLatency(latencyPromise) {
   else if (cnBasis < THRESHOLDS.latencyNear && usMin >= THRESHOLDS.usMid) confidence = 0.5;
   else if (usMin >= 400 && asiaMin < THRESHOLDS.latencyMid) confidence = 0.3;
 
+  // 归属地-RTT 核验：IP 声称在美国/亚太，但到同区域参照点的实测 RTT
+  // 远超当地水平（真在当地 < 100 ms）→ 物理位置与 IP 归属地不符，
+  // IP 更像代理/中转出口。RTT 无法伪造，是比时区不一致更强烈的矛盾信号
+  const flags = [];
+  let geoNote = "";
+  const region = Object.keys(REGION_COUNTRIES).find((k) =>
+    REGION_COUNTRIES[k].includes(ipInfo?.country)
+  );
+  const localMin = region === "us" ? usMin : region === "asia" ? asiaMin : null;
+  if (localMin !== null && localMin !== Infinity && localMin >= THRESHOLDS.geoRttMid) {
+    confidence = Math.max(
+      confidence,
+      localMin >= THRESHOLDS.geoRttFar ? 0.5 : 0.3
+    );
+    geoNote =
+      `\nIP 归属地为 ${ipInfo.country}，但到该区域参照点实测最低 ${localMin} ms` +
+      "（真在当地应 < 100 ms）：物理位置与 IP 归属地不符，IP 更像代理/中转出口";
+    flags.push(`IP 归属地 (${ipInfo.country}) 与到该区域的实测延迟 (${localMin} ms) 不符`);
+  }
+
   return {
     confidence,
     usMin,
     asiaMin,
+    flags,
     summary:
       usMin === Infinity ? "美国站点不可达" : `美国 ${usMin} ms / 亚太 ${fmtMs(asiaMin)}`,
     detail:
       results.map((r) => `${r.name}: ${fmtMs(r.ms)}`).join("\n") +
       "\n参照点为 AWS 区域端点（位置固定、无全球 CDN）。大陆直连美国通常 > 300 ms，" +
-      "而港/新/日/韩等地直连美国多在 150~250 ms",
+      "而港/新/日/韩等地直连美国多在 150~250 ms" +
+      geoNote,
   };
 }
 
@@ -648,7 +678,7 @@ async function runAll() {
   const [blocked, latency, intl, webrtc, dns] = await Promise.all([
     checkBlocked().catch((e) => (failCard("blocked", e), null)),
     latencyPromise.catch((e) => (failCard("latency", e), null)),
-    checkIntlLatency(latencyPromise).catch((e) => (failCard("intlLatency", e), null)),
+    checkIntlLatency(latencyPromise, ipInfo).catch((e) => (failCard("intlLatency", e), null)),
     checkWebRTC(ipInfo).catch((e) => (failCard("webrtc", e), null)),
     checkDnsLeak().catch((e) => (failCard("dnsLeak", e), null)),
   ]);
