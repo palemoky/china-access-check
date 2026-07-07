@@ -1,6 +1,6 @@
 {
   "$schema": "./node_modules/wrangler/config-schema.json",
-  "name": "china-access-check",
+  "name": "cn-check",
   "main": "src/index.ts",
   "compatibility_date": "2026-07-06",
   // DNS 泄露探测服务（可选，见 dns-probe/）不在此配置，以免在仓库中暴露自有域名：

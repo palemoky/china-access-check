@@ -51,7 +51,7 @@ sudo ufw allow 8653/tcp   # 查询 API（建议前面再挂 Nginx/Caddy 上 HTTP
 镜像由 GitHub Actions 自动构建并推送到 GHCR（`ghcr.io/<username>/dns-probe`，见 `.github/workflows/build-dns-probe.yml`，同时构建 amd64/arm64）。**服务器无需装 Go、也不在本地构建**，只需拉取镜像启动。
 
 ```bash
-git clone <本仓库> && cd china-access-check/dns-probe
+git clone <本仓库> && cd cn-check/dns-probe
 
 # 填写你的委派子域与 VPS 公网 IP
 cp .env.example .env

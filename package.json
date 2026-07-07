@@ -1,5 +1,5 @@
 {
-  "name": "china-access-check",
+  "name": "cn-check",
   "version": "0.1.0",
   "private": true,
   "description": "检测当前访问环境是否会被网站识别为中国大陆用户",
@@ -12,5 +12,10 @@
     "@cloudflare/workers-types": "^5.20260707.1",
     "typescript": "^6.0.3",
     "wrangler": "^4.107.0"
+  },
+  "overrides": {
+    "wrangler": {
+      "@cloudflare/workers-types": "^5.20260707.1"
+    }
   }
 }
