@@ -654,10 +654,16 @@ async function runAll() {
         "物理位置高度疑似大陆，IP 更像是分流代理的出口",
     });
   }
-  if (notCN && twCensored) {
+  // 🇹🇼 被屏蔽只说明设备是国行/中国区，人可能真在境外（游客、留学生带国行设备出国）。
+  // 只有当网络层还有「身在大陆」的证据时，才升级为「代理中国用户」的研判
+  const netInChina =
+    cnBasis < THRESHOLDS.latencyNear || !!dns?.chinaDns || !!webrtc?.chinaLeak;
+  if (notCN && twCensored && netInChina) {
     analysis.push({
       bonus: 8,
-      text: "设备为大陆行货或中国区系统（🇹🇼 被屏蔽），IP 却在境外：疑似使用代理的中国用户",
+      text:
+        "设备为大陆行货或中国区系统（🇹🇼 被屏蔽），IP 在境外但网络层仍显示身在大陆：" +
+        "疑似使用代理的中国用户",
     });
   }
   if (notCN && dns?.chinaDns) {
