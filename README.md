@@ -19,7 +19,7 @@
 | 检测项 | 权重 | 原理 |
 |---|---:|---|
 | IP 归属地 | 21 | Cloudflare 边缘提供的 IP 地理位置（`request.cf.country`），并用 chnroutes CIDR 独立核对；最直接的信号 |
-| 被屏蔽服务可达性 | 16 | 探测 Google (`generate_204`) 是否可达；不可达强烈暗示身处 GFW 之内 |
+| 被屏蔽服务可达性 | 16 | 探测 Google、YouTube、Facebook、X、Instagram、维基百科等被屏蔽服务是否可达；按不可达比例分级打分（全部不可达才满分，个别不可达可能只是服务故障或广告拦截），多服务同时不可达强烈暗示身处 GFW 之内 |
 | 大陆站点延迟 | 12 | 对百度、腾讯、哔哩哔哩 favicon 各采样 3 次取每站最小值，再取三站中**第二低**的值打分（单站可能有海外 CDN 节点，需两站佐证）；< 60ms 说明物理位置在大陆或紧邻 |
 | 浏览器时区 | 11 | `Intl.DateTimeFormat().resolvedOptions().timeZone` 为 `Asia/Shanghai` 等 |
 | 浏览器语言 | 10 | `navigator.languages` 首选 `zh-CN` / `zh-Hans` |

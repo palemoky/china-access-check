@@ -6,7 +6,7 @@
  * ============================================================ */
 const WEIGHTS = {
   ipCountry: 21,   // IP 归属地为中国大陆
-  blocked: 16,     // 无法访问 Google 等在大陆被屏蔽的服务
+  blocked: 16,     // 无法访问 Google、YouTube、X、Facebook 等在大陆被屏蔽的服务
   latency: 12,     // 到大陆站点的延迟显著更低（说明物理位置近）
   timezone: 11,    // 浏览器时区为中国时区
   language: 10,    // 浏览器语言为简体中文
@@ -49,10 +49,16 @@ const INTL_ENDPOINTS = [
   { name: "新加坡", region: "asia", url: "https://s3.ap-southeast-1.amazonaws.com/" },
 ];
 
-// 在大陆被屏蔽的服务
+// 在大陆被屏蔽的主流服务（generate_204 / favicon 均为轻量资源，支持 no-cors 探测）。
+// 覆盖多家独立基础设施：单一服务不可达可能是该服务自身故障或广告拦截，
+// 多个服务同时不可达才是身处 GFW 之后的强信号。
 const BLOCKED_ENDPOINTS = [
-  { name: "Google (gstatic)", url: "https://www.gstatic.com/generate_204" },
   { name: "Google", url: "https://www.google.com/generate_204" },
+  { name: "YouTube", url: "https://www.youtube.com/generate_204" },
+  { name: "Facebook", url: "https://www.facebook.com/favicon.ico" },
+  { name: "X (Twitter)", url: "https://x.com/favicon.ico" },
+  { name: "Instagram", url: "https://www.instagram.com/favicon.ico" },
+  { name: "维基百科", url: "https://zh.wikipedia.org/static/favicon/wikipedia.ico" },
 ];
 
 const CHINA_TIMEZONES = ["Asia/Shanghai", "Asia/Urumqi", "Asia/Chongqing", "Asia/Harbin"];
@@ -219,20 +225,31 @@ function checkTwFlag() {
 }
 
 async function checkBlocked() {
-  // 先确认本站可达（它就是对照组：用户网络本身是通的）
+  // 本站能加载即说明用户网络本身是通的（天然对照组），
+  // 因此这些服务不可达只能归因于封锁 / 拦截，而非断网
   const results = await Promise.all(BLOCKED_ENDPOINTS.map((e) => probe(e.url)));
   const failed = results.filter((r) => !r.ok).length;
-  const confidence = failed === results.length ? 1 : failed > 0 ? 0.5 : 0;
+  const total = results.length;
+  // 按不可达比例分级：全部不可达才给满分；个别失败可能只是该服务
+  // 自身故障或被广告拦截插件挡掉，给低置信度
+  const ratio = failed / total;
+  const confidence = ratio === 1 ? 1 : ratio >= 0.5 ? 0.7 : ratio > 0 ? 0.2 : 0;
   const lines = BLOCKED_ENDPOINTS.map(
     (e, i) => `${e.name}: ${results[i].ok ? `可达 (${results[i].ms} ms)` : "不可达"}`
   );
   return {
     confidence,
-    googleMs: results.find((r) => r.ok)?.ms ?? Infinity,
-    summary: failed === results.length ? "Google 不可达" : failed > 0 ? "部分不可达" : "Google 可达",
+    summary:
+      failed === total
+        ? `全部不可达 (${failed}/${total})`
+        : failed > 0
+          ? `部分不可达 (${failed}/${total})`
+          : `全部可达 (${total}/${total})`,
     detail:
       lines.join("\n") +
-      (failed > 0 ? "\n注意：广告拦截插件也可能导致误报" : ""),
+      (failed > 0 && failed < total
+        ? "\n注意：个别服务不可达也可能是广告拦截插件或服务自身故障所致"
+        : ""),
   };
 }
 
